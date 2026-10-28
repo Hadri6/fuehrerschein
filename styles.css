@@ -508,12 +508,12 @@ small,.small {
   filter:brightness(.95)
 }
 
-body[data-theme=dark] .btn {
+body[data-theme=dark] .btn:not(.secondary):not(.ghost):not(.danger) {
   color:#10251d
 }
 
 @media(prefers-color-scheme:dark) {
-  body:not([data-theme=light]) .btn {
+  body:not([data-theme=light]) .btn:not(.secondary):not(.ghost):not(.danger) {
     color:#10251d
   }
 }
@@ -1421,12 +1421,17 @@ body[data-theme=dark] .filter.active {
 
 .question-nav {
   display:flex;
-  flex-wrap:wrap;
+  flex-wrap:nowrap;
+  overflow-x:auto;
+  overscroll-behavior-x:contain;
+  scrollbar-width:thin;
   gap:7px;
-  margin:20px 0
+  margin:16px 0;
+  padding-bottom:4px
 }
 
 .question-dot {
+  flex:none;
   width:38px;
   min-height:44px;
   border:1px solid var(--line);

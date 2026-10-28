@@ -1,5 +1,5 @@
 'use strict';
-const CACHE_NAME = 'theorie-b-shell-v1';
+const CACHE_NAME = 'theorie-b-shell-v2';
 const SHELL = ['./', './index.html', './styles.css', './data.js', './app.js', './manifest.webmanifest', './icon.svg'];
 const shellPaths = new Set(SHELL.map(path => new URL(path, self.location).pathname));
 
@@ -16,14 +16,15 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (!shellPaths.has(url.pathname) && request.mode !== 'navigate') return;
+  // Network-first so content fixes reach the phone; the cache is the offline fallback.
   event.respondWith(caches.open(CACHE_NAME).then(async cache => {
-    const cached = await cache.match(request, { ignoreSearch: true });
-    if (cached) return cached;
     try {
-      const response = await fetch(request);
+      const response = await fetch(request, { cache: 'no-cache' });
       if (response.ok && shellPaths.has(url.pathname)) await cache.put(request, response.clone());
       return response;
     } catch (error) {
+      const cached = await cache.match(request, { ignoreSearch: true });
+      if (cached) return cached;
       if (request.mode === 'navigate') {
         const fallback = await cache.match('./index.html');
         if (fallback) return fallback;

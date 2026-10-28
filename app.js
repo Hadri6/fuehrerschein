@@ -199,7 +199,7 @@
   function practice() {
     if (session) return sessionView();
     const modes = [
-      ['quiz', 'quiz', 'تدريب الأسئلة', '٥٠ سؤالاً أصلياً بالألمانية، مع تلميح وشرح بالعربية. اختاري كل الإجابات الصحيحة.', 'ابدئي التدريب'],
+      ['quiz', 'quiz', 'تدريب الأسئلة', '٥٠ سؤالاً بأسلوب الامتحان بالألمانية، مع تلميح وشرح بالعربية. اختاري كل الإجابات الصحيحة.', 'ابدئي التدريب'],
       ['mini', 'clock', 'محاكاة مصغّرة', '٢٠ سؤالاً عشوائياً، دون كشف الحل قبل التسليم. يمكنك التجاوز والتعليم والعودة.', 'ابدئي المحاكاة'],
       ['number', 'numbers', 'تدريب الأرقام', '١٥ سؤال إدخال رقمي لتثبيت الصيغ. تقبل الفاصلة العشرية الألمانية أيضاً.', 'احسبي بنفسك'],
       ['sign', 'signs', 'اختبار الإشارات', 'تعرّفي إلى ٣٠ لوحة من الرسم. اختاري المعنى الصحيح بين ثلاثة خيارات.', 'اختبري ذاكرتك']
@@ -318,6 +318,8 @@
     document.title = `${pageNames[currentPage]} · Theorie B`;
     renderNav();
     if (currentPage === 'numbers') updateCalculator();
+    const qNav = $('.question-nav', main), qDot = qNav && $('.question-dot.current', qNav);
+    if (qDot) qNav.scrollLeft += qDot.getBoundingClientRect().left - qNav.getBoundingClientRect().left - (qNav.clientWidth - qDot.offsetWidth) / 2;
     if (scroll) window.scrollTo({ top: 0, behavior: 'instant' });
     if (focus) main.focus({ preventScroll: true });
     if (pendingHighlight) {
