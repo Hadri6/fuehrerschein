@@ -1,0 +1,16 @@
+{
+  "id": "./",
+  "name": "Theorie B",
+  "short_name": "نظري B",
+  "description": "نظرية القيادة بالألمانية مع شرح عربي وخطة يومين وتدريب دون اتصال",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f2",
+  "theme_color": "#087f74",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

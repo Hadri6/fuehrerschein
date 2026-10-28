@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#087f74">
+  <meta name="robots" content="noindex">
+  <meta name="description" content="مساحة هادئة لمراجعة نظرية القيادة B بالألمانية مع شرح عربي وخطة يومين وتدريب دون اتصال.">
+  <title>Theorie B · في يومين</title>
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./data.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">انتقلي إلى المحتوى</a>
+  <div class="app-frame">
+    <header class="topbar">
+      <a href="#home" class="brand" aria-label="Theorie B · الرئيسية">
+        <img src="./icon.svg" width="43" height="43" alt="">
+        <span><strong lang="de" dir="ltr">theorie<span class="brand-dot">.</span>b</strong><small>رخصتك تبدأ بفهمك</small></span>
+      </a>
+      <div class="top-actions">
+        <span class="connection" id="connection"><i></i><span>جاهزة للتعلّم</span></span>
+        <button id="theme-toggle" class="icon-button" aria-label="المظهر: تلقائي. اضغطي للتغيير" title="تغيير المظهر"></button>
+      </div>
+    </header>
+    <div class="search-wrap">
+      <label class="search-field" for="global-search"><span id="search-icon" aria-hidden="true"></span><input id="global-search" type="search" autocomplete="off" placeholder="ابحثي عن كلمة، قاعدة أو إشارة…" aria-label="بحث شامل بالألمانية أو العربية" aria-controls="search-results"><kbd aria-hidden="true">Ctrl K</kbd></label>
+      <div id="search-results" class="search-results" hidden></div>
+    </div>
+    <main id="main" tabindex="-1"></main>
+    <footer class="page-footer"><span lang="de" dir="ltr">Theorie B</span><span>فهمٌ أوضح، خطوة أهدأ.</span><span id="save-status">يُحفظ تقدمك على هذا الجهاز</span></footer>
+  </div>
+  <nav class="bottom-nav" aria-label="التنقل الرئيسي" id="bottom-nav"></nav>
+  <dialog id="more-dialog" class="more-dialog" aria-labelledby="more-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-heading"><div><span class="eyebrow">مساحتك الدراسية</span><h2 id="more-title">كل ما تحتاجينه</h2></div><button class="icon-button" id="close-more" aria-label="إغلاق القائمة"></button></div>
+    <div id="more-links" class="more-links"></div>
+    <p class="muted small">المراجعة والتقدم محفوظان على هذا الجهاز.</p>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript><div class="noscript">فعّلي JavaScript لعرض الدروس والتدريب. لا يتطلب التطبيق حساباً.</div></noscript>
+</body>
+</html>
