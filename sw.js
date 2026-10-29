@@ -1,6 +1,6 @@
 'use strict';
-const CACHE_NAME = 'theorie-b-shell-v2';
-const SHELL = ['./', './index.html', './styles.css', './data.js', './app.js', './manifest.webmanifest', './icon.svg'];
+const CACHE_NAME = 'theorie-b-shell-v3';
+const SHELL = ['./', './index.html', './styles.css', './data.js', './notes.js', './app.js', './manifest.webmanifest', './icon.svg'];
 const shellPaths = new Set(SHELL.map(path => new URL(path, self.location).pathname));
 
 self.addEventListener('install', event => {

@@ -1,6 +1,17 @@
 (() => {
   'use strict';
   const T = window.THEORIE;
+  const notes = window.NOTES || {};
+  const chapters = Array.isArray(notes.chapters) ? notes.chapters : [];
+  const meta = notes.meta || {};
+  const stats = notes.stats || {};
+  const learnedKey = 'theorie-b:learned';
+  let learned = new Set();
+  try {
+    const stored = JSON.parse(localStorage.getItem(learnedKey) || '[]');
+    if (Array.isArray(stored)) learned = new Set(stored.filter(x => typeof x === 'string'));
+  } catch { /* Keep learning available in memory when storage is unavailable. */ }
+  const catalogFilter = { group: 'all', five: false, unlearned: false, media: false, search: '' };
   const $ = (selector, root = document) => root.querySelector(selector);
   const main = $('#main');
   const KEY = 'theorie-b:v1';
@@ -40,7 +51,7 @@
   const n = value => new Intl.NumberFormat('ar', { maximumFractionDigits: 2 }).format(value);
   const latin = value => new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(value);
   const localDay = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  const pageNames = { home: 'الرئيسية', exam: 'كيف يعمل الامتحان', stems: 'أنماط رأس السؤال', patterns: 'أنماط الإجابات', vorfahrt: 'الأولوية والترتيب', numbers: 'الأرقام والحاسبة', signs: 'الإشارات', vocab: 'قاموس الامتحان', practice: 'تدرّبي', mistakes: 'أخطائي', plan: 'خطة اليومين', golden: 'الورقة الذهبية' };
+  const pageNames = { home: 'الرئيسية', katalog: 'الكتالوج', exam: 'كيف يعمل الامتحان', stems: 'أنماط رأس السؤال', patterns: 'أنماط الإجابات', 'drill-patterns': 'اختبري الأنماط', vorfahrt: 'الأولوية والترتيب', numbers: 'الأرقام والحاسبة', signs: 'الإشارات', vocab: 'قاموس الامتحان', practice: 'تدرّبي', mistakes: 'أخطائي', plan: 'خطة اليومين', golden: 'الورقة الذهبية' };
   let storageOK = true;
   let raw = {};
   try { raw = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch { storageOK = false; }
@@ -60,10 +71,12 @@
   let currentPage = 'home';
   let session = null;
   let patternFilter = 'all';
+  let patternDrill = null;
   let numberFilter = 'all';
   let vocabGroup = 'all';
   let flash = null;
   let searchTimer;
+  let catalogSearchTimer;
   let toastTimer;
   let searchHits = [];
   let pendingHighlight = null;
@@ -109,8 +122,8 @@
   const link = (page, label, cls = 'btn', ico = 'arrow') => `<a class="${cls}" href="#${page}">${label}${ico ? icon(ico) : ''}</a>`;
   const back = page => `<a class="back-link" href="#${page}">${icon('back')}${pageNames[page]}</a>`;
   function renderNav() {
-    const items = [['home', 'الرئيسية', 'home'], ['patterns', 'الأنماط', 'book'], ['vorfahrt', 'الأولوية', 'road'], ['numbers', 'الأرقام', 'numbers'], ['practice', 'تدرّبي', 'quiz']];
-    const primary = { stems: 'patterns', mistakes: 'practice' }[currentPage] || currentPage;
+    const items = [['home', 'الرئيسية', 'home'], ['katalog', 'الكتالوج', 'book'], ['patterns', 'الأنماط', 'target'], ['numbers', 'الأرقام', 'numbers'], ['practice', 'تدرّبي', 'quiz']];
+    const primary = { stems: 'patterns', 'drill-patterns': 'patterns', mistakes: 'practice' }[currentPage] || currentPage;
     $('#bottom-nav').innerHTML = items.map(([page, label, ico]) => `<a href="#${page}" class="nav-item ${primary === page ? 'active' : ''}" ${currentPage === page ? 'aria-current="page"' : ''}>${icon(ico)}<span>${label}</span></a>`).join('') + `<button class="nav-item ${items.some(x => x[0] === primary) ? '' : 'active'}" data-action="more" aria-haspopup="dialog" aria-controls="more-dialog">${icon('more')}<span>المزيد</span></button>`;
   }
   function theme() {
@@ -122,9 +135,84 @@
     const dark = state.theme === 'dark' || state.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches;
     $('meta[name="theme-color"]').content = dark ? '#101c1a' : '#087f74';
   }
+  const foldCatalog = value => String(value ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed\u0640]/g, '').replace(/ß/g, 'ss');
+  const cardKey = (chapter, card, index) => typeof card.k === 'string' && card.k ? card.k : `${chapter.id}#${index}`;
+  const catalogCards = chapter => chapter.cards || [];
+  function matchingCards(chapter) {
+    const query = foldCatalog(catalogFilter.search.trim());
+    return catalogCards(chapter).map((card, index) => ({ card, index })).filter(({ card, index }) =>
+      (!catalogFilter.five || card.pts === 5) &&
+      (!catalogFilter.unlearned || !learned.has(cardKey(chapter, card, index))) &&
+      (!catalogFilter.media || Object.keys(card.media || {}).length > 0) &&
+      (!query || foldCatalog([chapter.id, chapter.title_ar, chapter.title_de, card.ar, card.trap, ...(card.de || []), ...(card.ids || [])].join(' ')).includes(query)));
+  }
+  function officialLinks(chapter, ids, media = {}) {
+    return ids.map(id => {
+      const kind = media[id], marker = kind === 'p' ? '📷' : kind === 'v' ? '🎬' : '';
+      const label = kind === 'p' ? 'سؤال بصورة' : kind === 'v' ? 'سؤال بفيديو' : '';
+      return `<a class="official-id" lang="de" dir="ltr" ${label ? `aria-label="${label}: ${h(id)}"` : ''} href="${h((meta.base_url || '') + (meta.paths?.[id.split('-')[0]] ?? chapter.path) + '/' + id)}" target="_blank" rel="noopener">${marker ? `${marker} ` : ''}${h(id)}</a>`;
+    }).join('');
+  }
+  function catalogCard(chapter, card, index) {
+    const key = cardKey(chapter, card, index), done = learned.has(key), ids = card.ids || [];
+    const media = card.media || {}, hasMedia = Object.keys(media).length > 0;
+    return `<article class="catalog-card"><div class="catalog-card-head">${card.pts === 5 ? '<span class="badge no">٥ نقاط</span>' : ''}<button class="mark-button ${done ? 'is-done' : ''}" data-action="catalog-learn" data-key="${h(key)}" aria-pressed="${done}">${done ? '✓ حفظتها' : 'حفظتها'}</button></div><p class="catalog-rule">${ar(card.ar)}</p><div class="catalog-chips">${(card.de || []).map(term => `<span class="term-chip" lang="de" dir="ltr">${h(term)}</span>`).join('')}</div>${card.trap ? `<p class="catalog-trap">⚠ ${ar(card.trap)}</p>` : ''}<div class="catalog-chips">${officialLinks(chapter, ids.slice(0, 6), media)}${ids.length > 6 ? `<details class="id-expander"><summary lang="de" dir="ltr">+${ids.length - 6}</summary><div class="catalog-chips">${officialLinks(chapter, ids.slice(6), media)}</div></details>` : ''}</div>${hasMedia ? '<p class="muted small">بعض هذه الأسئلة تعتمد على صورة أو فيديو: افتحي الرقم لتري المشهد وتدرّبي عليه.</p>' : ''}</article>`;
+  }
+  function chapterProgress(chapter) {
+    const total = catalogCards(chapter).length;
+    const done = catalogCards(chapter).filter((card, i) => learned.has(cardKey(chapter, card, i))).length;
+    return `<small>${n(done)} / ${n(total)} بطاقة محفوظة</small>${bar(done, total, 'بطاقات الفصل المحفوظة')}`;
+  }
+  function catalogSummary() {
+    const total = chapters.reduce((sum, c) => sum + catalogCards(c).length, 0);
+    const done = chapters.reduce((sum, c) => sum + catalogCards(c).filter((card, i) => learned.has(cardKey(c, card, i))).length, 0);
+    return `<strong>${n(done)} / ${n(total)} بطاقة محفوظة</strong>${bar(done, total, 'بطاقات الكتالوج المحفوظة')}`;
+  }
+  function catalogResults() {
+    const active = catalogFilter.group !== 'all' || catalogFilter.five || catalogFilter.unlearned || catalogFilter.media || catalogFilter.search.trim();
+    const list = chapters.filter(c => catalogFilter.group === 'all' || c.group === catalogFilter.group).map(chapter => ({ chapter, matches: matchingCards(chapter) })).filter(x => !active || x.matches.length);
+    return `<p class="muted small" role="status">${n(list.length)} فصلاً · ${n(list.reduce((sum, x) => sum + x.matches.length, 0))} بطاقة${list.length ? '' : ' · لا توجد نتائج مطابقة'}</p>` + list.map(({ chapter, matches }) => `<details class="catalog-chapter" data-chapter="${h(chapter.id)}" ${active ? 'open' : ''}><summary><strong>${h(chapter.title_ar)}</strong><span lang="de" dir="ltr">${h(chapter.title_de)}</span><span class="muted small">${de(chapter.id)} · ${n(chapter.n)} سؤالاً${chapter.n5 > 0 ? ` · ${n(chapter.n5)} بخمس نقاط` : ''}</span><div class="chapter-progress">${chapterProgress(chapter)}</div></summary><div class="catalog-card-list" ${active ? 'data-loaded="true"' : ''}>${active ? matches.map(({ card, index }) => catalogCard(chapter, card, index)).join('') : ''}</div></details>`).join('');
+  }
+  function katalog() {
+    return heading('الكتالوج الرسمي كما هو في الامتحان', `${n(meta.questions || 0)} سؤالاً رسمياً للفئة B · ${n(meta.cards ?? chapters.reduce((sum, c) => sum + catalogCards(c).length, 0))} بطاقة حقيقة بكلماتنا · نص الأسئلة لا يُنشر هنا؛ كل بطاقة تربطك بأرقام الأسئلة الرسمية`) + verificationDetails() + `<section class="card catalog-overview"><div id="catalog-progress">${catalogSummary()}</div><button class="btn" data-action="catalog-five">ابدئي بأسئلة الخمس نقاط</button></section><div class="catalog-filters"><div class="filters" aria-label="مجموعة الكتالوج">${[['all', 'الكل'], ['G', 'الأساسي G'], ['B', 'الإضافي B']].map(([value, label]) => `<button class="filter ${catalogFilter.group === value ? 'active' : ''}" data-action="catalog-group" data-value="${value}" aria-pressed="${catalogFilter.group === value}">${label}</button>`).join('')}</div><label class="catalog-toggle"><input type="checkbox" id="catalog-five" ${catalogFilter.five ? 'checked' : ''}>أسئلة ٥ نقاط فقط</label><label class="catalog-toggle"><input type="checkbox" id="catalog-unlearned" ${catalogFilter.unlearned ? 'checked' : ''}>غير المحفوظة فقط</label><label class="catalog-toggle"><input type="checkbox" id="catalog-media" ${catalogFilter.media ? 'checked' : ''}>أسئلة الصور والفيديو</label><label class="catalog-search" for="catalog-search">ابحثي في الكتالوج<input id="catalog-search" type="search" value="${h(catalogFilter.search)}" placeholder="قاعدة، كلمة ألمانية أو رقم سؤال…" aria-controls="catalog-results"></label></div><div id="catalog-results">${catalogResults()}</div>`;
+  }
+  function verificationDetails() {
+    const verification = notes.verification;
+    if (!verification) return '';
+    const blind = verification.blind?.codex300;
+    const percentage = value => Number.isFinite(value) ? String(Number((value * 100).toFixed(1))) : '—';
+    const steps = Array.isArray(verification.steps) ? verification.steps : [];
+    return `<details class="card verification-details"><summary>كيف تحققنا من هذا المحتوى؟</summary><div class="verification-content"><p><strong>المصدر:</strong> ${h(verification.source || '')}</p>${steps.map(step => `<div class="verification-step"><strong class="verification-who" dir="ltr">${h(step.who || '')}</strong><span>${h(step.what || '')}</span><span>${h(step.result || '')}</span></div>`).join('')}${blind ? `<p class="verification-blind">امتحان أعمى مستقل: النصية ${percentage(blind.text)}% · الصور والفيديو ${percentage(blind.media)}% · أسئلة الخمس نقاط ${percentage(blind.p5)}%</p>` : ''}${verification.limits ? `<p class="note warning verification-limits">${h(verification.limits)}</p>` : ''}</div></details>`;
+  }
+  function updateCatalogResults() {
+    const results = $('#catalog-results');
+    if (results) results.innerHTML = catalogResults();
+  }
+  const measured = value => typeof value === 'number' && Number.isFinite(value);
+  const pct = value => `${n(value * 100)}٪`;
+  function rateBar(rate) {
+    return measured(rate) ? `<div class="rate-meter ${rate >= .75 ? 'rate-good' : rate <= .25 ? 'rate-bad' : ''}"><span>${pct(rate)}</span><div class="rate-track" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, rate * 100))}%"></i></div></div>` : '';
+  }
+  function patternMeasurement(id) {
+    const item = stats.patterns?.[id];
+    return item?.n >= 10 && measured(item.rate) ? `<p class="measurement">مقيس: صحيح في ${pct(item.rate)} من ${n(item.n)} خياراً</p>` : '';
+  }
+  function measuredNumbers() {
+    if (!Object.keys(stats).length) return '';
+    const base = stats.base || {}, agreement = stats.agreement;
+    const behaviour = agreement?.agreed || Object.values(stats.behaviour || {})[0];
+    const labels = { R: 'متهوّر/يتجاهل الخطر', C: 'حذِر/دفاعي', E: 'يتوقّع خطراً أو خطأ الآخرين', N: 'تضييق مطلق (nur/immer/alle…)', F: 'معلومة محايدة' };
+    const tiles = [];
+    if (measured(base.correct_rate)) tiles.push(`${pct(base.correct_rate)} من الخيارات صحيحة`);
+    if ([base.two_correct, base.three_correct, base.mc_questions].every(measured) && base.mc_questions > 0) tiles.push(`${n(base.two_correct + base.three_correct)}/${n(base.mc_questions)} سؤالاً فيها أكثر من إجابة صحيحة (${pct((base.two_correct + base.three_correct) / base.mc_questions)})`);
+    if (measured(base.one_correct)) tiles.push(`${n(base.one_correct)} فقط بإجابة واحدة`);
+    const behaviourRows = Object.entries(labels).filter(([key]) => measured(behaviour?.[key]?.n) && measured(behaviour?.[key]?.rate));
+    const words = (Array.isArray(stats.words) ? stats.words : []).filter(w => w && measured(w.n) && measured(w.rate));
+    return `<section class="measured-numbers" id="numbers-evidence"><h2>ماذا تقول الأرقام؟${measured(base.questions) ? ` مقيس على ${n(base.questions)} سؤالاً رسمياً` : ''}</h2>${tiles.length ? `<div class="evidence-tiles">${tiles.map(t => `<div class="card">${t}</div>`).join('')}</div><p>لذلك: لا تكتفي بإجابة واحدة إن كان خيار آخر صحيحاً أيضاً؛ الخطأ الأشهر هو نقص علامة.</p>` : ''}${behaviourRows.length ? `<div class="card"><h3>السلوك في الخيارات</h3><table class="evidence-table"><thead><tr><th scope="col">السلوك</th><th scope="col">عدد الخيارات</th><th scope="col">نسبة الصحيح</th></tr></thead><tbody>${behaviourRows.map(([key, label]) => `<tr><th scope="row">${ar(label)}</th><td>${n(behaviour[key].n)}</td><td>${rateBar(behaviour[key].rate)}</td></tr>`).join('')}</tbody></table>${measured(agreement?.agreement) ? `<p class="muted small">صنّف وكيلان كل خيار دون رؤية الإجابات؛ اتفقا في ${pct(agreement.agreement)}</p>` : ''}</div>` : ''}${words.length ? `<div class="card"><h3>الكلمة والسياق</h3><table class="evidence-table words-table"><thead><tr><th scope="col">الكلمة</th><th scope="col">العدد</th><th scope="col">نسبة الصحيح والحكم</th></tr></thead><tbody>${words.map(w => `<tr><th scope="row" lang="de" dir="ltr">${h(w.term)}</th><td>${n(w.n)}</td><td>${rateBar(w.rate)}<small>${w.rate <= .25 ? 'غالباً خطأ' : w.rate >= .75 ? 'غالباً صحيح' : 'لا تحكمي بالكلمة وحدها'}</small></td></tr>`).join('')}</tbody></table></div>` : ''}${Array.isArray(stats.nur?.classes) && stats.nur.classes.length ? `<div class="note"><h3>${de('nur')} في سياقها</h3><div class="content-grid">${stats.nur.classes.filter(Boolean).map(c => `<article class="card"><h4>${h(c.ar_title)}</h4><p>${ar(c.ar_rule)}</p>${measured(c.correct) && measured(c.n) ? `<small>صحيح في ${n(c.correct)} من ${n(c.n)}</small>` : ''}</article>`).join('')}</div></div>` : ''}${measured(stats.engine?.coverage) && measured(stats.engine?.accuracy) ? `<p class="note">الكلمات وحدها تحسم ${pct(stats.engine.coverage)} فقط من الخيارات بدقة ${pct(stats.engine.accuracy)}؛ البطاقات في «الكتالوج» هي التي تغطي الباقي.</p>` : ''}</section>`;
+  }
   function home() {
     const modules = [
-      ['patterns', 'book', 'S1–S7 · W1–W21', 'اقرئي ما بين الكلمات', 'أنماط السؤال والإجابة، مع استثناءاتها.'],
+      ['patterns', 'book', 'S1–S7 · W1–W22', 'اقرئي ما بين الكلمات', 'أنماط السؤال والإجابة، مع استثناءاتها.'],
       ['vorfahrt', 'road', 'Vorfahrt', 'من يمر أولاً؟', 'خطوات واضحة وتقاطعات تفاعلية.'],
       ['numbers', 'numbers', 'Zahlen & Formeln', 'أرقام لها معنى', 'بطاقات مختصرة وحاسبة مسافة التوقف.'],
       ['signs', 'signs', 'Verkehrszeichen', 'تعرّفي إلى الإشارة', 'اقلبي البطاقة واكتشفي فخ السؤال.'],
@@ -138,6 +226,7 @@
     const nextPage = nextPlan?.page || 'golden';
     const accuracy = state.attempts ? Math.round(state.correct / state.attempts * 100) : 0;
     return `<div class="hero"><div class="hero-copy"><span class="eyebrow">خطة مركّزة · يومان لفهم الأساس</span><h1>خطوة أقرب<br>إلى الرخصة.</h1><p>قواعد واضحة، شرح عربي،<br>وتدريب بالألمانية.</p><div class="hero-actions">${link(nextPage, completed || state.plan.length ? 'واصلي رحلتك' : 'لنبدأ معاً')}${link('plan', 'خطة اليومين', 'btn ghost', '')}</div></div><div class="hero-progress"><div class="progress-ring" role="img" aria-label="تمت مراجعة ${percent} بالمئة من المحتوى"><svg viewBox="0 0 180 180" aria-hidden="true"><circle class="ring-track" cx="90" cy="90" r="76"/><circle class="ring-value" cx="90" cy="90" r="76" stroke-dasharray="477.52" stroke-dashoffset="${477.52 * (1 - percent / 100)}"/></svg><div class="ring-text"><strong>${percent}<small>%</small></strong><small>من رحلتك</small></div></div><p>${n(completed)} من ${n(total)}<br>عناصر راجعتِها</p></div></div>
+      <div class="home-plan catalog-promo"><div><h2>حلّلنا ${n(meta.questions || 0)} سؤالاً من الكتالوج الرسمي الساري (منذ 1.4.2025)</h2>${notes.verification ? '<a class="verification-home-link" href="#katalog">راجعه ٦ وكلاء ذكاء اصطناعي واختُبر امتحاناً أعمى</a>' : ''}</div>${link('katalog', 'افتحي الكتالوج', 'btn', 'book')}</div>
       <div class="stats"><div class="stat"><div class="stat-icon">${icon('flame')}</div><div><strong>${n(streak())}</strong><small>أيام متتالية</small></div></div><div class="stat"><div class="stat-icon">${icon('target')}</div><div><strong>${state.attempts ? `${n(accuracy)}٪` : '—'}</strong><small>دقة كل محاولاتك</small></div></div><div class="stat"><div class="stat-icon">${icon('mistakes')}</div><div><strong>${n(Object.keys(state.mistakes).length)}</strong><small>أخطاء للمراجعة</small></div></div></div>
       <div class="section-heading"><h2>كل قاعدة، في مكانها</h2>${link('exam', 'عن الامتحان', '', 'arrow')}</div>
       <div class="module-grid">${modules.map(([page, ico, german, title, desc], i) => `<a href="#${page}" class="module-card"><div class="module-top"><span class="module-icon">${icon(ico)}</span>${de(german)}</div><div><h3>${title}</h3><p>${desc}</p></div><div class="module-foot"><span>${n(parts[i][0])} / ${n(parts[i][1])} ${page === 'practice' ? 'صحيحة في آخر محاولة' : 'مُراجَعة'}</span>${icon('arrow')}</div>${bar(...parts[i], title)}</a>`).join('')}</div>
@@ -153,9 +242,9 @@
   function patterns() {
     const verdicts = { yes: '✔ غالباً صحيح', no: '✘ غالباً خطأ', depends: '⚖ حسب القاعدة' };
     const list = T.patterns.filter(p => patternFilter === 'all' || p.verdict === patternFilter);
-    return heading('تعرّفي إلى نمط الإجابة', 'الكلمات تعطي إشارة؛ القاعدة والاستثناء يحسمان الإجابة.', de('W1–W21'), link('stems', 'رأس السؤال S1–S7', 'btn secondary', 'book')) +
+    return heading('تعرّفي إلى نمط الإجابة', 'الكلمات تعطي إشارة؛ القاعدة والاستثناء يحسمان الإجابة.', de('W1–W22'), `<div class="pattern-drill-links">${link('drill-patterns', 'اختبري الأنماط', 'btn', 'quiz')}${link('stems', 'رأس السؤال S1–S7', 'btn secondary', 'book')}</div>`) + measuredNumbers() +
       `<article class="card nur-card" id="nur-highlight"><span class="nur-word" lang="de" dir="ltr">nur</span><h2>«فقط» ليست خطأ تلقائياً</h2><p>هل تلغي الحذر أو تمنح حقاً مطلقاً؟ غالباً خطأ. هل تؤكد منعاً أو شرط سلامة؟ قد تكون صحيحة.</p><p>${de('Nur Zeit baut Alkohol ab.')} <span class="good">✔</span></p></article><p class="muted small" style="margin-bottom:18px">الأنماط وسائل للفهم. اقرئي السياق والاستثناء قبل اختيار الإجابة.</p><div class="filters" aria-label="تصفية الأنماط">${[['all', 'كل الأنماط'], ['yes', '✔ غالباً صحيح'], ['no', '✘ غالباً خطأ'], ['depends', '⚖ حسب القاعدة']].map(([value, label]) => `<button class="filter ${patternFilter === value ? 'active' : ''}" aria-pressed="${patternFilter === value}" data-action="pattern-filter" data-value="${value}">${label}</button>`).join('')}</div>
-      <div class="content-grid">${list.map(p => `<article class="card" id="item-${p.id}"><div class="card-title"><div><span class="tag" lang="de" dir="ltr">${p.id}</span><h2>${p.ar_title}</h2></div><div><span class="badge ${p.verdict}">${verdicts[p.verdict]}</span><div class="reliability">الموثوقية: ${p.reliability}</div></div></div><div class="pattern-words">${p.de.map(x => de(x)).join('')}</div><p class="pattern-body">${ar(p.ar_why)}</p>${p.exceptions.length ? `<div class="pattern-exceptions"><h3>انتبهي إلى الاستثناء</h3>${p.exceptions.map(e => `<div class="exception">${blockDE(e.de)}<p>${ar(e.ar)}</p></div>`).join('')}</div>` : '<p class="muted small">لا استثناء إضافياً مذكوراً في المواصفات لهذا النمط.</p>'}<div class="examples">${p.examples.map(e => `<div class="example"><span class="${e.correct ? 'good' : 'bad'}" aria-label="${e.correct ? 'صحيح' : 'خطأ'}">${e.correct ? '✔' : '✘'}</span><div>${blockDE(e.de)}<p>${ar(e.ar)}</p></div></div>`).join('')}</div>${mark('patterns', p.id)}</article>`).join('')}</div>`;
+      <div class="content-grid">${list.map(p => `<article class="card" id="item-${p.id}"><div class="card-title"><div><span class="tag" lang="de" dir="ltr">${p.id}</span><h2>${p.ar_title}</h2></div><div><span class="badge ${p.verdict}">${verdicts[p.verdict]}</span><div class="reliability">الموثوقية: ${p.reliability}</div></div></div>${patternMeasurement(p.id)}<div class="pattern-words">${p.de.map(x => de(x)).join('')}</div><p class="pattern-body">${ar(p.ar_why)}</p>${p.exceptions.length ? `<div class="pattern-exceptions"><h3>انتبهي إلى الاستثناء</h3>${p.exceptions.map(e => `<div class="exception">${blockDE(e.de)}<p>${ar(e.ar)}</p></div>`).join('')}</div>` : '<p class="muted small">لا استثناء إضافياً مذكوراً في المواصفات لهذا النمط.</p>'}<div class="examples">${p.examples.map(e => `<div class="example"><span class="${e.correct ? 'good' : 'bad'}" aria-label="${e.correct ? 'صحيح' : 'خطأ'}">${e.correct ? '✔' : '✘'}</span><div>${blockDE(e.de)}<p>${ar(e.ar)}</p></div></div>`).join('')}</div>${mark('patterns', p.id)}</article>`).join('')}</div>`;
   }
   function vorfahrt() {
     return heading('من يمر أولاً؟', 'رتّبي المرجعيات، ثم افحصي اتجاه كل مركبة.', de('Vorfahrt & Vorrang')) + `<div class="hierarchy">${T.vorfahrt.hierarchy.map((x, i) => `<div><span class="step-number">${i + 1}</span>${de(x)}</div>`).join('')}</div><div class="two-col"><article class="card"><h2>القواعد التي تحتاجينها</h2>${T.vorfahrt.rules.map(r => `<div class="rule">${blockDE(r.de)}<p>${ar(r.ar)}</p></div>`).join('')}${mark('vorfahrt', 'rules')}</article><div class="stack"><article class="card solver"><span class="eyebrow">احتفظي بهذا الترتيب</span><h2>حلّي التقاطع في ٥ خطوات</h2>${T.vorfahrt.steps.map((x, i) => `<div class="solver-step"><span class="step-number">${i + 1}</span><div>${blockDE(x.de)}<p>${ar(x.ar)}</p></div></div>`).join('')}</article><div class="note warning">لا تفرضي الأولوية. إذا تجاهلها الآخر، تنازلي عنها عند الحاجة لتفادي الخطر.</div></div></div><div class="section-heading"><h2>تصوّري الموقف، ثم حلّيه</h2></div><p class="muted small">أعلى الرسم هو الشمال. السهم الصغير في مقدمة السيارة يبين اتجاه قدومها؛ المسار الأبيض يوضح مقصدها. الرسوم تعليمية مبسطة.</p><div class="scenario-grid">${T.vorfahrt.scenarios.map(s => `<article class="card scenario-card" id="item-${s.id}"><h3>${s.title}</h3><div class="crossing" role="img" aria-label="${h(s.cars.map(c => c.ar).join(' '))}">${s.svg}</div><div>${s.cars.map(c => `<div class="car-key">${blockDE(c.de)}<p>${c.ar}</p></div>`).join('')}</div><button class="btn secondary full" data-action="scenario" data-id="${s.id}" aria-expanded="false" aria-controls="answer-${s.id}">أظهري الترتيب${icon('arrow')}</button><div class="scenario-answer" id="answer-${s.id}" hidden><div class="order" lang="de" dir="ltr">${s.order.join(' → ')}</div><p>${ar(s.explain_ar)}</p></div></article>`).join('')}</div>`;
@@ -204,9 +293,44 @@
       ['number', 'numbers', 'تدريب الأرقام', '١٥ سؤال إدخال رقمي لتثبيت الصيغ. تقبل الفاصلة العشرية الألمانية أيضاً.', 'احسبي بنفسك'],
       ['sign', 'signs', 'اختبار الإشارات', 'تعرّفي إلى ٣٠ لوحة من الرسم. اختاري المعنى الصحيح بين ثلاثة خيارات.', 'اختبري ذاكرتك']
     ];
-    return heading('الفهم يصبح ثقة بالتدريب', 'اقرئي رأس السؤال، ثم افحصي كل خيار بمفرده.', 'مساحة التطبيق', link('mistakes', `أخطائي · ${n(Object.keys(state.mistakes).length)}`, 'btn secondary', 'mistakes')) + `<div class="practice-grid">${modes.map(([mode, ico, title, desc, cta]) => `<article class="card practice-card ${mode === 'quiz' ? 'featured' : ''}"><div class="module-icon">${icon(ico)}</div><h2>${title}</h2><p>${desc}</p><button class="btn ${mode === 'quiz' ? '' : 'secondary'}" data-action="start" data-mode="${mode}">${cta}${icon('arrow')}</button></article>`).join('')}</div><div class="section-heading"><h2>مهم قبل المحاكاة</h2></div><div class="note">${ar(T.exam.miniNote)}</div><div class="note warning">${ar(T.exam.simulatorNote)}</div>`;
+    return heading('الفهم يصبح ثقة بالتدريب', 'اقرئي رأس السؤال، ثم افحصي كل خيار بمفرده.', 'مساحة التطبيق', link('mistakes', `أخطائي · ${n(Object.keys(state.mistakes).length)}`, 'btn secondary', 'mistakes')) + `<div class="practice-grid"><article class="card practice-card"><div class="module-icon">${icon('target')}</div><h2>اختبري الأنماط</h2><p>١٥ عبارة عشوائية من إحصاءات الكتالوج الرسمي. هل تميل للصحة أم للخطأ، أم تحتاج إلى سياق؟</p>${link('drill-patterns', 'اختبري الأنماط')}</article>${modes.map(([mode, ico, title, desc, cta]) => `<article class="card practice-card ${mode === 'quiz' ? 'featured' : ''}"><div class="module-icon">${icon(ico)}</div><h2>${title}</h2><p>${desc}</p><button class="btn ${mode === 'quiz' ? '' : 'secondary'}" data-action="start" data-mode="${mode}">${cta}${icon('arrow')}</button></article>`).join('')}</div><div class="section-heading"><h2>مهم قبل المحاكاة</h2></div><div class="note">${ar(T.exam.miniNote)}</div><div class="note warning">${ar(T.exam.simulatorNote)}</div>`;
   }
   const shuffled = items => { const copy = [...items]; for (let i = copy.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [copy[i], copy[j]] = [copy[j], copy[i]]; } return copy; };
+  const patternAnswers = ['صحيح غالباً', 'خطأ غالباً', 'لا يُحكم بالكلمة وحدها'];
+  const patternVerdict = rate => rate >= .75 ? 0 : rate <= .25 ? 1 : 2;
+  function patternDrillItems() {
+    const items = [], seen = new Set();
+    const add = (item, answer, rule = '', prompt = item?.term) => {
+      if (typeof prompt !== 'string' || !prompt.trim() || !measured(item?.rate) || item.rate < 0 || item.rate > 1 || !measured(item.n) || item.n <= 0) return;
+      const key = prompt.trim().toLocaleLowerCase('de').replace(/\s+/g, ' ');
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ prompt: prompt.trim(), rate: item.rate, n: item.n, answer, rule, ar: typeof item.ar === 'string' ? item.ar : '' });
+    };
+    for (const item of Array.isArray(stats.words) ? stats.words : []) add(item, patternVerdict(item?.rate));
+    for (const [group, answer] of [['true', 0], ['false', 1]]) {
+      for (const item of Array.isArray(stats.mined?.[group]) ? stats.mined[group] : []) add(item, answer);
+    }
+    for (const item of Array.isArray(stats.nur?.classes) ? stats.nur.classes : []) {
+      if (!measured(item?.correct) || !measured(item.n) || item.n <= 0 || item.correct < 0 || item.correct > item.n || typeof item.ar_rule !== 'string') continue;
+      const fragments = [...item.ar_rule.matchAll(/«([^»]+)»/g)].map(match => match[1].trim()).filter(Boolean);
+      const rate = item.correct / item.n;
+      if (fragments.length) add({ rate, n: item.n }, patternVerdict(rate), item.ar_rule, fragments.join(' / '));
+    }
+    return items;
+  }
+  function newPatternDrill() {
+    patternDrill = { items: shuffled(patternDrillItems()).slice(0, 15), index: 0, score: 0, answer: null };
+  }
+  function patternDrillView() {
+    if (!patternDrill) newPatternDrill();
+    const { items, index, score, answer } = patternDrill;
+    const intro = heading('اختبري الأنماط', 'احكمي على الميل الإحصائي للعبارة في الكتالوج الرسمي؛ السياق يبقى ضرورياً.') + back('patterns');
+    if (!items.length) return intro + '<div class="card pattern-drill"><h2>لا توجد إحصاءات للتدريب بعد</h2><p>عندما تتوفر بيانات الأنماط، ستجدين هنا جولة جديدة للتدرّب.</p></div>';
+    if (index >= items.length) return intro + `<section class="card pattern-drill"><h2 id="pattern-drill-result" tabindex="-1">اكتملت الجولة</h2><p>نتيجتك: ${n(score)} من ${n(items.length)}</p><button class="btn" data-action="pattern-drill-restart">جولة جديدة</button></section>`;
+    const item = items[index], answered = answer !== null;
+    return intro + `<section class="card pattern-drill" aria-labelledby="pattern-drill-prompt"><p>العبارة ${n(index + 1)} من ${n(items.length)}</p><h2 id="pattern-drill-prompt" class="pattern-drill-prompt" lang="de" dir="ltr" tabindex="-1">${h(item.prompt)}</h2><div class="pattern-drill-answers" role="group" aria-label="اختاري حكم العبارة">${patternAnswers.map((label, i) => `<button class="btn secondary" data-action="pattern-drill-answer" data-value="${i}" ${answered ? 'disabled' : ''}>${label}</button>`).join('')}</div>${answered ? `<div class="feedback ${answer === item.answer ? '' : 'wrong'}" id="pattern-drill-feedback" tabindex="-1" role="region" aria-label="تصحيح الإجابة"><strong>${answer === item.answer ? 'إجابة صحيحة' : 'إجابة غير صحيحة'}</strong><p>الحكم: ${patternAnswers[item.answer]}</p><p>في الكتالوج الرسمي: صحيح في ${pct(item.rate)} من ${n(item.n)} خياراً</p>${item.ar ? `<p>المعنى: ${ar(item.ar)}</p>` : ''}${item.rule ? `<p>${ar(item.rule)}</p>` : ''}</div><button class="btn" data-action="pattern-drill-next">${index === items.length - 1 ? 'نتيجة الجولة' : 'التالي'}</button>` : ''}</section>`;
+  }
   function validItem(item) {
     if (item.kind === 'quiz') return T.quiz.some(q => q.id === item.id);
     if (item.kind === 'sign') return T.signs.some(q => q.nr === item.id);
@@ -313,7 +437,7 @@
     return heading('الورقة الذهبية', 'اقرئي بهدوء. تذكّري القاعدة، وانتبهِي للاستثناء.', 'قبل الامتحان بـ١٠ دقائق', `<button class="btn secondary print-button" data-action="print">طباعة${icon('print')}</button>`) + `<div class="golden-grid">${T.golden.map(x => `<article class="golden-card">${blockDE(x.de)}<p>${ar(x.ar)}</p></article>`).join('')}</div>`;
   }
   function render({ scroll = true, focus = true } = {}) {
-    const pages = { home, exam, stems, patterns, vorfahrt, numbers, signs, vocab, practice, mistakes, plan, golden };
+    const pages = { home, katalog, exam, stems, patterns, 'drill-patterns': patternDrillView, vorfahrt, numbers, signs, vocab, practice, mistakes, plan, golden };
     main.innerHTML = pages[currentPage]();
     document.title = `${pageNames[currentPage]} · Theorie B`;
     renderNav();
@@ -329,15 +453,21 @@
     $('#save-status').textContent = storageOK ? 'يُحفظ تقدمك على هذا الجهاز' : 'الحفظ غير متاح؛ تقدم هذه الجلسة يبقى حتى إغلاقها';
   }
   function route() {
+    clearTimeout(catalogSearchTimer);
     const [page, id] = location.hash.replace(/^#/, '').split('/');
     if (page === 'main') return;
     currentPage = Object.hasOwn(pageNames, page) ? page : 'home';
+    if (currentPage === 'katalog' && ['G', 'G5', 'B'].includes(id)) {
+      catalogFilter.group = id === 'G5' ? 'G' : id;
+      catalogFilter.five = id === 'G5';
+      catalogFilter.search = ''; catalogFilter.unlearned = false;
+    }
     if (currentPage !== 'vocab') flash = null;
     if (id) {
       if (currentPage === 'patterns') patternFilter = 'all';
       if (currentPage === 'numbers') numberFilter = 'all';
       if (currentPage === 'vocab') { vocabGroup = 'all'; flash = null; }
-      pendingHighlight = `item-${id}`;
+      if (currentPage !== 'katalog') pendingHighlight = `item-${id}`;
     }
     closeSearch();
     const dialog = $('#more-dialog'); if (dialog.open) dialog.close();
@@ -374,6 +504,49 @@
     const button = event.target.closest('[data-action]');
     if (!button || button.disabled) return;
     const { action, id, value, mode, index, section, key } = button.dataset;
+    if (currentPage === 'drill-patterns' && action.startsWith('pattern-drill-')) {
+      if (action === 'pattern-drill-restart') newPatternDrill();
+      if (action === 'pattern-drill-answer') {
+        if (!patternDrill || patternDrill.answer !== null || !patternDrill.items[patternDrill.index] || !['0', '1', '2'].includes(value)) return;
+        patternDrill.answer = Number(value);
+        if (patternDrill.answer === patternDrill.items[patternDrill.index].answer) patternDrill.score++;
+      }
+      if (action === 'pattern-drill-next') {
+        if (!patternDrill || patternDrill.answer === null) return;
+        patternDrill.index++; patternDrill.answer = null;
+      }
+      render({ scroll: false, focus: false });
+      $(action === 'pattern-drill-answer' ? '#pattern-drill-feedback' : patternDrill.index >= patternDrill.items.length ? '#pattern-drill-result' : '#pattern-drill-prompt')?.focus();
+      return;
+    }
+    if (action === 'catalog-group') {
+      catalogFilter.group = value;
+      main.querySelectorAll('[data-action="catalog-group"]').forEach(el => {
+        const active = el.dataset.value === value;
+        el.classList.toggle('active', active); el.setAttribute('aria-pressed', String(active));
+      });
+      updateCatalogResults();
+    }
+    if (action === 'catalog-five') { catalogFilter.five = true; $('#catalog-five').checked = true; updateCatalogResults(); }
+    if (action === 'catalog-learn') {
+      if (learned.has(key)) learned.delete(key); else learned.add(key);
+      try { localStorage.setItem(learnedKey, JSON.stringify([...learned])); }
+      catch { toast('الحفظ غير متاح؛ تبقى العلامات خلال هذه الجلسة فقط.'); }
+      const done = learned.has(key);
+      button.textContent = done ? '✓ حفظتها' : 'حفظتها';
+      button.classList.toggle('is-done', done); button.setAttribute('aria-pressed', String(done));
+      $('#catalog-progress').innerHTML = catalogSummary();
+      const chapter = chapters.find(c => c.id === button.closest('[data-chapter]').dataset.chapter);
+      $('.chapter-progress', button.closest('[data-chapter]')).innerHTML = chapterProgress(chapter);
+      if (catalogFilter.unlearned) {
+        const remaining = main.querySelectorAll('[data-action="catalog-learn"]');
+        const position = [...remaining].indexOf(button);
+        const nextKey = remaining[position + 1]?.dataset.key || remaining[position - 1]?.dataset.key;
+        updateCatalogResults();
+        const target = [...main.querySelectorAll('[data-action="catalog-learn"]')].find(el => el.dataset.key === nextKey);
+        (target || $('#catalog-unlearned')).focus({ preventScroll: true });
+      }
+    }
     if (action === 'more') { $('#more-dialog').showModal(); return; }
     if (action === 'review') {
       if (reviewed(section, id)) state.reviewed[section] = state.reviewed[section].filter(x => x !== id);
@@ -437,8 +610,21 @@
       if (items.length) { session = { mode: 'mistakes', items: items.map(prepareItem), index: 0, answers: {}, checked: {}, flagged: [], finished: false, askSubmit: false, askExit: false }; render(); }
     }
   });
+  main.addEventListener('toggle', event => {
+    const detail = event.target;
+    if (!detail.matches('.catalog-chapter') || !detail.open) return;
+    const list = $('.catalog-card-list', detail);
+    if (list.dataset.loaded) return;
+    const chapter = chapters.find(c => c.id === detail.dataset.chapter);
+    list.innerHTML = matchingCards(chapter).map(({ card, index }) => catalogCard(chapter, card, index)).join('') || '<p class="muted">لا توجد بطاقات منشورة لهذا الفصل بعد.</p>';
+    list.dataset.loaded = 'true';
+  }, true);
   document.addEventListener('change', event => {
     const input = event.target;
+    if (input.id === 'catalog-five' || input.id === 'catalog-unlearned' || input.id === 'catalog-media') {
+      catalogFilter[input.id === 'catalog-five' ? 'five' : input.id === 'catalog-unlearned' ? 'unlearned' : 'media'] = input.checked;
+      updateCatalogResults();
+    }
     if (input.matches('[data-plan]')) {
       const id = input.dataset.plan;
       if (input.checked) { if (!state.plan.includes(id)) state.plan.push(id); activity(); } else state.plan = state.plan.filter(x => x !== id);
@@ -461,6 +647,7 @@
     if (input.id === 'vocab-group') { vocabGroup = input.value; refreshInPlace(); $('#vocab-group').focus({ preventScroll: true }); }
   });
   document.addEventListener('input', event => {
+    if (event.target.id === 'catalog-search') { catalogFilter.search = event.target.value; clearTimeout(catalogSearchTimer); catalogSearchTimer = setTimeout(updateCatalogResults, 150); }
     if (event.target.id === 'calc-speed') updateCalculator();
     if (event.target.id === 'global-search') { clearTimeout(searchTimer); searchTimer = setTimeout(search, 120); }
     if (event.target.id === 'drill-answer' && session) session.answers[session.index] = event.target.value;
@@ -478,7 +665,7 @@
   $('#close-more').innerHTML = icon('close');
   $('#close-more').addEventListener('click', () => $('#more-dialog').close());
   $('#more-dialog').addEventListener('click', event => { if (event.target === $('#more-dialog')) { const box = event.target.getBoundingClientRect(); if (event.clientY < box.top || event.clientX < box.left || event.clientX > box.right) event.target.close(); } });
-    $('#more-links').innerHTML = [['signs', 'signs'], ['vocab', 'vocab'], ['plan', 'plan'], ['golden', 'golden'], ['mistakes', 'mistakes'], ['exam', 'info'], ['stems', 'book']].map(([page, ico]) => `<a class="more-link" href="#${page}">${icon(ico)}${pageNames[page]}</a>`).join('');
+    $('#more-links').innerHTML = [['vorfahrt', 'road'], ['signs', 'signs'], ['vocab', 'vocab'], ['plan', 'plan'], ['golden', 'golden'], ['mistakes', 'mistakes'], ['exam', 'info'], ['stems', 'book']].map(([page, ico]) => `<a class="more-link" href="#${page}">${icon(ico)}${pageNames[page]}</a>`).join('');
     $('#more-links').addEventListener('click', event => { if (event.target.closest('a')) $('#more-dialog').close(); });
   let offlineReady = false;
   function connection() {
